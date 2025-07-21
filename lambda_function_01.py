@@ -1,30 +1,41 @@
-# ===== 標準ライブラリ =====
+# ======================================
+# 標準ライブラリ
+# ======================================
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 
-# ===== サードパーティ製ライブラリ =====
+# ======================================
+# サードパーティ製ライブラリ
+# ======================================
 import boto3
 from openpyxl import Workbook, load_workbook
 
-
-# --- ログ設定 ---
+# ======================================
+# ログ設定
+# ======================================
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# --- AWSクライアントの初期化 ---
+# ======================================
+# AWSクライアントの初期化
+# ======================================
 connect_client = boto3.client('connect')
 s3_client = boto3.client('s3')
 
-# --- 定数設定 ---
-BUCKET_NAME = 'amazon-connect-list'  # 対象のS3バケット名
-INSTANCE_ID = '**********'  # Amazon ConnectのインスタンスID
-OBJECT_KEY = 'シフト表.xlsx'  # シフト表が保存されているExcelファイルのS3キー
-CALL_LOG_FOLDER = 'connect-call-log/'  # 通話ログの保存先フォルダ
+# ======================================
+# 定数設定
+# ======================================
+BUCKET_NAME = 'amazon-connect-list'         # 対象のS3バケット名
+INSTANCE_ID = '**********'                  # Amazon ConnectのインスタンスID
+OBJECT_KEY = 'シフト表.xlsx'                # シフト表が保存されているExcelファイルのS3キー
+CALL_LOG_FOLDER = 'connect-call-log/'       # 通話ログの保存先フォルダ
 
 
-# --- Excelの日付セルを日付型に変換する関数 ---
+# ======================================
+# Excelの日付セルを日付型に変換する関数
+# ======================================
 def parse_excel_date(value):
     if isinstance(value, datetime):
         return value.date()
@@ -37,7 +48,9 @@ def parse_excel_date(value):
     return None
 
 
-# --- Lambda関数のメイン処理 ---
+# ======================================
+# Lambda関数のメイン処理
+# ======================================
 def lambda_handler(event, context):
     try:
         logger.info(f"受信イベント: {json.dumps(event)}")
@@ -49,13 +62,17 @@ def lambda_handler(event, context):
         alarm_date = datetime.utcnow().date()
         logger.info(f"アラーム発生日: {alarm_date}")
 
+        # ======================================
         # S3からシフトExcelファイルを取得して読み込み
+        # ======================================
         response = s3_client.get_object(Bucket=BUCKET_NAME, Key=OBJECT_KEY)
         excel_data = response['Body'].read()
         wb = load_workbook(filename=BytesIO(excel_data), data_only=True)
         sheet = wb['シフト']
 
-        # --- Excelから発信候補者を抽出 ---
+        # ======================================
+        # Excelから発信候補者を抽出
+        # ======================================
         all_candidates = []
         for row in sheet.iter_rows(min_row=2):  # ヘッダーを除いて2行目以降を処理
             raw_phone = str(row[8].value).strip() if row[8].value else None
@@ -70,11 +87,12 @@ def lambda_handler(event, context):
 
         logger.info(f"候補者総数: {len(all_candidates)}")
 
-        # --- 発信対象者を決定 ---
+        # ======================================
+        # 発信対象者を決定
+        # ======================================
         if contact_index is None:
             # 初回発信：本日の日付に一致する行のみ対象
-            candidates = [(n, p)
-                          for n, p, d in all_candidates if d == alarm_date]
+            candidates = [(n, p) for n, p, d in all_candidates if d == alarm_date]
             contact_index = 0
         else:
             # 2回目以降：日付に関係なく全て対象
@@ -95,7 +113,9 @@ def lambda_handler(event, context):
         custom_attributes = {'Message': 'アラーム発生'}
         contact_flow_id = '**********'  # ConnectのコンタクトフローID
 
-        # --- 通話ログExcelを準備 ---
+        # ======================================
+        # 通話ログExcelを準備
+        # ======================================
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_key = f'{CALL_LOG_FOLDER}result_log_{timestamp}.xlsx'
 
@@ -104,7 +124,9 @@ def lambda_handler(event, context):
         ws_log.title = "発信ログ"
         ws_log.append(["名前", "電話番号", "発信日時", "発信結果", "エラー内容", "ContactId"])
 
-        # --- Amazon Connectで発信実行 ---
+        # ======================================
+        # Amazon Connectで発信実行
+        # ======================================
         try:
             response = connect_client.start_outbound_voice_contact(
                 InstanceId=INSTANCE_ID,
@@ -121,7 +143,9 @@ def lambda_handler(event, context):
             logger.error(f"{phone_number} への発信失敗: {str(e)}")
             ws_log.append([name, phone_number, now_str, "失敗", str(e), ""])
 
-        # --- 発信ログをS3に保存 ---
+        # ======================================
+        # 発信ログをS3に保存
+        # ======================================
         output_stream = BytesIO()
         wb_log.save(output_stream)
         output_stream.seek(0)
@@ -133,7 +157,9 @@ def lambda_handler(event, context):
             ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
 
-        # --- 最新ログのキーと現在のインデックスをS3に保存（Lambda②で使用） ---
+        # ======================================
+        # 最新ログのキーと現在のインデックスをS3に保存（Lambda②で使用）
+        # ======================================
         LOG_OUTPUT_KEY_RECORD = f"{CALL_LOG_FOLDER}latest_log_key.json"
         log_info = {"log_key": log_key, "contact_index": contact_index}
         s3_client.put_object(
